@@ -1,6 +1,8 @@
 from base64 import b64encode, b64decode
 from random import randint
 
+import yaml
+
 from app.utility.logger import Logger
 from app.utility.stealth import obfuscate_ps1, obfuscate_bash
 
@@ -9,7 +11,9 @@ class UtilityService:
 
     @staticmethod
     def apply_stealth(executor, code):
-        options = dict(psh=lambda c: obfuscate_ps1(c), bash=lambda c: obfuscate_bash(c))
+        options = dict(windows=lambda c: obfuscate_ps1(c),
+                       darwin=lambda c: obfuscate_bash(c),
+                       linux=lambda c: obfuscate_bash(c))
         return options[executor](code)
 
     @staticmethod
@@ -28,3 +32,10 @@ class UtilityService:
     @staticmethod
     def create_logger(name):
         return Logger(name)
+
+    @staticmethod
+    def strip_yml(path):
+        if path:
+            with open(path) as seed:
+                return list(yaml.load_all(seed))
+        return []

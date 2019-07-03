@@ -13,3 +13,9 @@
 [submodule "plugins/stockpile"]
 	path = plugins/stockpile
 	url = https://github.com/mitre/stockpile.git
+[submodule "plugins/ssl"]
+	path = plugins/ssl
+	url = https://github.com/mitre/ssl.git
+[submodule "plugins/caltack"]
+	path = plugins/caltack
+	url = https://github.com/mitre/caltack

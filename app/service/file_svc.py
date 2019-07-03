@@ -1,6 +1,5 @@
 import os
 
-import aiohttp_jinja2
 from aiohttp import web
 
 from app.utility.logger import Logger
@@ -8,25 +7,16 @@ from app.utility.logger import Logger
 
 class FileSvc:
 
-    def __init__(self, file_stores):
-        self.file_stores = file_stores
+    def __init__(self, payload_dirs, exfil_dir):
+        self.payload_dirs = payload_dirs
         self.log = Logger('file_svc')
-
-    async def render(self, request):
-        name = request.headers.get('file')
-        group = request.rel_url.query.get('group')
-        environment = request.app[aiohttp_jinja2.APP_KEY]
-        url_root = '{scheme}://{host}'.format(scheme=request.scheme, host=request.host)
-        headers = dict([('CONTENT-DISPOSITION', 'attachment; filename="%s"' % name)])
-        rendered = await self._render(name, group, environment, url_root)
-        if rendered:
-            return web.HTTPOk(body=rendered, headers=headers)
-        return web.HTTPNotFound(body=rendered)
+        self.exfil_dir = exfil_dir
 
     async def download(self, request):
         name = request.headers.get('file')
         file_path, headers = await self._download(name)
         if file_path:
+            self.log.debug('downloading %s...' % name)
             return web.FileResponse(path=file_path, headers=headers)
         return web.HTTPNotFound(body='File not found')
 
@@ -36,7 +26,7 @@ class FileSvc:
             field = await reader.next()
             filename = field.filename
             size = 0
-            with open(os.path.join('/tmp/', filename), 'wb') as f:
+            with open(os.path.join(self.exfil_dir, filename), 'wb') as f:
                 while True:
                     chunk = await field.read_chunk()
                     if not chunk:
@@ -47,16 +37,8 @@ class FileSvc:
         except Exception as e:
             self.log.debug('Exception uploading file %s' % e)
 
-    @staticmethod
-    async def _render(name, group, environment, url_root):
-        try:
-            t = environment.get_template(name)
-            return t.render(url_root=url_root, group=group)
-        except Exception:
-            return None
-
     async def _download(self, name):
-        for store in self.file_stores:
+        for store in self.payload_dirs:
             for root, dirs, files in os.walk(store):
                 if name in files:
                     headers = dict([('CONTENT-DISPOSITION', 'attachment; filename="%s"' % name)])
