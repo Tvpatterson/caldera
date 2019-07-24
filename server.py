@@ -15,6 +15,7 @@ from app.service.auth_svc import AuthService
 from app.service.data_svc import DataService
 from app.service.file_svc import FileSvc
 from app.service.operation_svc import OperationService
+from app.service.parsing_svc import ParsingService
 from app.service.planning_svc import PlanningService
 from app.service.utility_svc import UtilityService
 
@@ -82,13 +83,14 @@ if __name__ == '__main__':
 
         plugin_modules = build_plugins(cfg['plugins'])
         utility_svc = UtilityService()
-        data_svc = DataService(CoreDao('core.db'), utility_svc)
+        data_svc = DataService(CoreDao('core.db', memory=cfg['memory']), utility_svc)
+        logging.debug('Using an in-memory database: %s' % cfg['memory'])
         planning_svc = PlanningService(data_svc, utility_svc)
-        operation_svc = OperationService(data_svc=data_svc, utility_svc=utility_svc, planning_svc=planning_svc, planner=cfg['planner'])
+        parsing_svc = ParsingService(data_svc)
+        operation_svc = OperationService(data_svc=data_svc, utility_svc=utility_svc, planning_svc=planning_svc, parsing_svc=parsing_svc)
         auth_svc = AuthService(utility_svc=utility_svc)
         logging.debug('Uploaded files will be put in %s' % cfg['exfil_dir'])
-        logging.debug('Downloaded payloads will come from %s' % cfg['payloads'])
-        file_svc = FileSvc(cfg['payloads'], cfg['exfil_dir'])
+        file_svc = FileSvc(['plugins/%s/payloads' % p.name.lower() for p in plugin_modules], cfg['exfil_dir'])
         services = dict(
             data_svc=data_svc, auth_svc=auth_svc, utility_svc=utility_svc, operation_svc=operation_svc,
             file_svc=file_svc, planning_svc=planning_svc, plugins=plugin_modules

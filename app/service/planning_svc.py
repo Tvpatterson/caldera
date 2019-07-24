@@ -27,14 +27,24 @@ class PlanningService:
         links[:] = [l for l in links if l['command'] not in host_already_ran]
         links[:] = [l for l in links if
                     not re.findall(r'#{(.*?)}', b64decode(l['command']).decode('utf-8'), flags=re.DOTALL)]
+        await self._remove_cleanup_cmds(operation, links)
         self.log.debug('Created %d links for %s' % (len(links), agent['paw']))
         return [link for link in list(reversed(sorted(links, key=lambda k: k['score'])))]
 
-    async def wait_for_phase(self, op_id, agent_id):
-        op = await self.data_svc.explode_operation(dict(id=op_id))
-        while next((lnk for lnk in op[0]['chain'] if lnk['host_id'] == agent_id and not lnk['finish']), False):
-            await asyncio.sleep(2)
-            op = await self.data_svc.explode_operation(dict(id=op_id))
+    async def wait_for_phase(self, operation):
+        for member in operation['host_group']['agents']:
+            op = await self.data_svc.explode_operation(dict(id=operation['id']))
+            while next((True for lnk in op[0]['chain'] if lnk['host_id'] == member['id'] and not lnk['finish']),
+                       False):
+                await asyncio.sleep(3)
+                op = await self.data_svc.explode_operation(dict(id=operation['id']))
+
+    async def decode(self, encoded_cmd, agent, group):
+        decoded_cmd = self.utility_svc.decode_bytes(encoded_cmd)
+        decoded_cmd = decoded_cmd.replace('#{server}', agent['server'])
+        decoded_cmd = decoded_cmd.replace('#{group}', group)
+        decoded_cmd = decoded_cmd.replace('#{files}', agent['files'])
+        return decoded_cmd
 
     """ PRIVATE """
 
@@ -44,10 +54,8 @@ class PlanningService:
         """
         group = operation['host_group']['name']
         for link in links:
-            decoded_test = b64decode(link['command']).decode('utf-8')
-            decoded_test = decoded_test.replace('#{server}', agent['server'])
-            decoded_test = decoded_test.replace('#{group}', group)
-            decoded_test = decoded_test.replace('#{files}', agent['files'])
+            decoded_test = await self.decode(link['command'], agent, group)
+            cleanup_cmd = await self.decode(link.get('cleanup'), agent, group)
 
             variables = re.findall(r'#{(.*?)}', decoded_test, flags=re.DOTALL)
             if variables:
@@ -56,7 +64,6 @@ class PlanningService:
                     copy_test = copy.deepcopy(decoded_test)
                     copy_link = copy.deepcopy(link)
 
-                    cleanup_cmd = self.utility_svc.decode_bytes(copy_link.get('cleanup'))
                     variant, cleanup, score, rewards = await self._build_single_test_variant(copy_test, cleanup_cmd, combo)
                     copy_link['command'] = await self._apply_stealth(operation, agent, variant)
                     copy_link['cleanup'] = self.utility_svc.encode_string(cleanup)
@@ -65,7 +72,13 @@ class PlanningService:
                     links.append(copy_link)
             else:
                 link['command'] = await self._apply_stealth(operation, agent, decoded_test)
+                link['cleanup'] = await self._apply_stealth(operation, agent, cleanup_cmd)
         return links
+
+    def _reward_fact_relationship(self, combo_set, combo_link, score):
+        if len(combo_set) == 1 and len(combo_link) == 1:
+            score *= 2
+        return score
 
     @staticmethod
     async def _build_relevant_facts(variables, facts):
@@ -78,24 +91,32 @@ class PlanningService:
             variable_facts = []
             for fact in facts:
                 if fact['property'] == v:
-                    variable_facts.append((fact['property'], fact['value'], fact['score'], fact['id']))
+                    variable_facts.append(fact)
             relevant_facts.append(variable_facts)
         return relevant_facts
 
-    @staticmethod
-    async def _build_single_test_variant(copy_test, clean_test, combo):
+    async def _build_single_test_variant(self, copy_test, clean_test, combo):
         """
         Replace all variables with facts from the combo to build a single test variant
         """
-        score, rewards = 0, []
+        score, rewards, combo_set_id, combo_link_id = 0, list(), set(), set()
         for var in combo:
-            score += (score + var[2])
-            rewards.append(var[3])
-            copy_test = copy_test.replace('#{%s}' % var[0], var[1])
-            clean_test = clean_test.replace('#{%s}' % var[0], var[1])
+            score += (score + var['score'])
+            rewards.append(var['id'])
+            copy_test = copy_test.replace('#{%s}' % var['property'], var['value'])
+            clean_test = clean_test.replace('#{%s}' % var['property'], var['value'])
+            combo_set_id.add(var['set_id'])
+            combo_link_id.add(var['link_id'])
+        score = self._reward_fact_relationship(combo_set_id, combo_link_id, score)
         return copy_test, clean_test, score, rewards
 
     async def _apply_stealth(self, operation, agent, decoded_test):
         if operation['stealth']:
             decoded_test = self.utility_svc.apply_stealth(agent['platform'], decoded_test)
         return self.utility_svc.encode_string(decoded_test)
+
+    @staticmethod
+    async def _remove_cleanup_cmds(operation, links):
+        if not operation['cleanup']:
+            for link in links:
+                link['cleanup'] = None
